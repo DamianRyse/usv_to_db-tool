@@ -13,27 +13,9 @@ fn main() -> Result <(), Box<dyn std::error::Error>> {
         eprintln!("Usage {} <upsc-parameter>", args[0]);
         std::process::exit(1);
     }
+    
     let upsc_parameter = &args[1];
-
-    // Execute upsc and get the output
-    let output = Command::new("upsc")
-        .arg(upsc_parameter)
-        .output()
-        .expect("failed to execute process");
-
-    if !output.status.success() {
-        eprintln!("upsc command failed: {:?}", output);
-        std::process::exit(1);
-    }
-
-    // Parse the output ink key-value map
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut data = HashMap::new();
-    for line in stdout.lines() {
-        if let Some((k,v)) = line.split_once(":") {
-            data.insert(k.trim().to_string(), v.trim().to_string());
-        }
-    }
+    let upsc_hashmap = get_upsc_output(&upsc_parameter);
 
     // Parse the DB config file
     let config_content = fs::read_to_string(DB_CONFIG)?;
@@ -62,7 +44,7 @@ fn main() -> Result <(), Box<dyn std::error::Error>> {
     // commit.
     let mut sql_transaction = conn.start_transaction(TxOpts::default())?;
     
-    for (key, value) in data {
+    for (key, value) in upsc_hashmap {
         sql_transaction.exec_drop(
             r"INSERT INTO status (`Key`, `Value`) VALUES (:key, :value) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
             params! { "key" => key, "value" => value, },
@@ -115,4 +97,30 @@ fn parse_db_config(config: &str) -> Result<String, &'static str> {
 fn log(msg: &str) -> String{
     let now = Local::now();
     format!("[{}] {}", now.format("%d.%m.%Y %H:%M"), msg)
+}
+
+
+fn get_upsc_output(upsc_parameter: &String) -> HashMap<String,String> {
+    // Execute upsc and get the output
+    let output = Command::new("upsc")
+        .arg(upsc_parameter)
+        .output()
+        .expect("failed to execute process");
+
+    if !output.status.success() {
+        eprintln!("upsc command failed: {:?}", output);
+        std::process::exit(1);
+    }
+    
+    let output = String::from_utf8_lossy(&output.stdout);
+
+    // Parse the output ink key-value map
+    let mut data = HashMap::new();
+    for line in output.lines() {
+        if let Some((k,v)) = line.split_once(":") {
+            data.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    
+    data
 }
