@@ -11,6 +11,12 @@ host	 = <IP or hostname of your database>
 user	 = <DB username>
 password = <DB password>
 database = <DB name>
+
+influx_host     = <IP or hostname of your InfluxDB 3>
+influx_token    = <Token with Write access>
+influx_database = <database>
+influx_port     = <Port>
+influx_scheme   = <http or https>
 ```
 
 ### Run the application
