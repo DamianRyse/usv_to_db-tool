@@ -176,8 +176,14 @@ async fn send_to_influxdb(config: &InfluxDbConfig, influx_db_lp: &InfluxDbLp) ->
         .send()
         .await?;
 
-    println!("Status: {}", response.status());
-    Ok(())
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(()),
+        _ => {
+            let status = response.status();
+            let body = response.text().await?;
+            Err(format!("InfluxDB request failed with status {}: {}", status, body).into())
+        }
+    }
 }
 
 fn get_upsc_output(upsc_parameter: &String) -> HashMap<String,String> {
