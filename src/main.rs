@@ -171,7 +171,7 @@ async fn send_to_influxdb(config: &InfluxDbConfig, influx_db_lp: &InfluxDbLp) ->
     let response = client
         .post(config.build_url())
         .header("Authorization", format!("Bearer {}", config.token))
-        .header("Content-Type", "text/plain")
+        .header("Content-Type", "text/plain; charset=utf-8")
         .body(influx_db_lp.to_string())
         .send()
         .await?;
