@@ -19,7 +19,7 @@ impl InfluxDbConfig {
             InfluxDbProtocol::Http => "http",
             InfluxDbProtocol::Https => "https"
         };
-        format!("{}//{}:{}/api/v3/write_lp?db={}&precision=ms",proto, self.hostname, self.port,self.database)
+        format!("{}://{}:{}/api/v3/write_lp?db={}&precision=ms",proto, self.hostname, self.port,self.database)
     }
 }
 
