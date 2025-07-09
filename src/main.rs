@@ -1,9 +1,15 @@
+mod influxdb_config;
+
 use std::{collections::HashMap, env, fs, process::Command};
 use mysql::*;
 use mysql::prelude::*;
-use chrono::Local;
+use chrono::{Local};
+use crate::influxdb_config::{InfluxDbConfig, InfluxDbFieldSet, InfluxDbLp, InfluxDbProtocol, InfluxDbTagSet};
+use reqwest;
+use tokio;
 
-fn main() -> Result <(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result <(), Box<dyn std::error::Error>> {
 
     const DB_CONFIG: &str = "/etc/usv-to-db-tool/database.conf" ;
 
@@ -44,13 +50,13 @@ fn main() -> Result <(), Box<dyn std::error::Error>> {
     // commit.
     let mut sql_transaction = conn.start_transaction(TxOpts::default())?;
     
-    for (key, value) in upsc_hashmap {
+    for (key, value) in &upsc_hashmap {
         sql_transaction.exec_drop(
             r"INSERT INTO status (`Key`, `Value`) VALUES (:key, :value) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
             params! { "key" => key, "value" => value, },
         )?;
     }
-    
+        
     // Add an extra DB row for the update timestamp
     let timestamp_now = Local::now();
     
@@ -65,6 +71,30 @@ fn main() -> Result <(), Box<dyn std::error::Error>> {
     sql_transaction.commit()?;
 
     println!("{}", log("Database successfully updated."));
+
+    
+    
+    // ============================================================
+    // MARIADB DATABASE UPDATE DONE. CONTINUING NOW WITH INFLUXDB 3.
+    // ============================================================
+    let influxdb_config = parse_influx_config(&config_content)?;
+
+    let influxdb_lp = InfluxDbLp {
+        table: String::from("measurement__power"),
+        tag_set: vec![
+            InfluxDbTagSet { key: "device_serial".to_string(), value: upsc_hashmap.get("device.serial").unwrap().to_string() },
+            InfluxDbTagSet { key: "device_model".to_string(), value: upsc_hashmap.get("device.model").unwrap().to_string() }
+        ],
+        field_set: vec![
+                        InfluxDbFieldSet { key: "ups_realpower".to_string(), value: upsc_hashmap.get("ups.realpower").unwrap().to_string()},
+                        InfluxDbFieldSet { key: "ups_power".to_string(), value: upsc_hashmap.get("ups.power").unwrap().to_string() },
+                        InfluxDbFieldSet { key: "battery_charge".to_string(), value: upsc_hashmap.get("battery.charge").unwrap().to_string() }
+        ],
+        timestamp: timestamp_now.timestamp_millis()
+    };
+
+    send_to_influxdb(&influxdb_config, &influxdb_lp).await?;
+
     Ok(())
 }
 
@@ -88,10 +118,46 @@ fn parse_db_config(config: &str) -> Result<String, &'static str> {
     }
 
     if user.is_empty() || db.is_empty() {
-        return Err("Missing required config values");
+        return Err("Missing required config values for MariaDB");
     }
 
     Ok(format!("mysql://{}:{}@{}/{}", user, pass, host, db))
+}
+
+fn parse_influx_config(config: &str) -> Result<InfluxDbConfig, &'static str> {
+    let mut host = "";
+    let mut token = "";
+    let mut database = "";
+    let mut port: u16 = 8181;
+    let mut scheme: InfluxDbProtocol = InfluxDbProtocol::Http;
+
+    for line in config.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            match k.trim() {
+                "influx_host" => host = v.trim(),
+                "influx_token" => token = v.trim(),
+                "influx_database" => database = v.trim(),
+                "influx_port" => port = v.trim().parse::<u16>().expect("Invalid port number."),
+                "influx_scheme" => match v.trim() {
+                    "https" => scheme = InfluxDbProtocol::Https,
+                    _ => scheme = InfluxDbProtocol::Http,
+                },
+                _ => {}
+            }
+        }
+    }
+
+    if token.is_empty() || host.is_empty() || database.is_empty() {
+        return Err("Missing required config values for InfluxDB");
+    }
+
+    Ok(InfluxDbConfig {
+        hostname: host.to_string(),
+        token: token.to_string(),
+        database: database.to_string(),
+        port: port,
+        protocol: scheme
+    })
 }
 
 fn log(msg: &str) -> String{
@@ -99,6 +165,20 @@ fn log(msg: &str) -> String{
     format!("[{}] {}", now.format("%d.%m.%Y %H:%M"), msg)
 }
 
+async fn send_to_influxdb(config: &InfluxDbConfig, influx_db_lp: &InfluxDbLp) -> Result<(), Box<dyn std::error::Error>>{
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(config.build_url())
+        .header("Authorization", format!("Bearer {}", config.token))
+        .header("Content-Type", "text/plain")
+        .body(influx_db_lp.to_string())
+        .send()
+        .await?;
+
+    println!("Status: {}", response.status());
+    Ok(())
+}
 
 fn get_upsc_output(upsc_parameter: &String) -> HashMap<String,String> {
     // Execute upsc and get the output
